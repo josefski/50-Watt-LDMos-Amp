@@ -1,4 +1,5 @@
-# main.py
+# main.py (display/band state changes only shown; rest of main preserved)
+
 from machine import I2C, Pin
 import utime
 import display
@@ -11,7 +12,7 @@ import swr_calc
 import Vcc
 import control
 import thermistor
-import band_switch 
+import band_switch
 
 # --- Hardware bring-up ---
 i2c = I2C(
@@ -25,10 +26,7 @@ ads = a2d.ADS1115(i2c, address=config.ADS1115_ADDR)
 if not ads.probe():
     raise RuntimeError("ADS1115 not found on I2C")
 
-vdrain = v_drain.VDrain(
-    adc_channel=config.VDRAIN_ADC_CH,
-    scale=config.VDRAIN_SCALE
-)
+vdrain = v_drain.VDrain(adc_channel=config.VDRAIN_ADC_CH, scale=config.VDRAIN_SCALE)
 
 isense = current_sense.CurrentSense(
     adc_channel=config.CURRENT_ADC_CH,
@@ -55,7 +53,6 @@ temp = thermistor.ThermistorADS(
     data_rate=config.THERM_ADS_DATA_RATE
 )
 
-
 vcc = Vcc.Vcc(adc_channel=config.VCC_ADC_CH, scale=config.VCC_SCALE)
 
 # LCD I2C on GP2 (SDA) / GP3 (SCL)
@@ -75,14 +72,11 @@ else:
 ctrl = control.AmpControl(config)
 
 # Default OFF at boot => assert disable output immediately
-# If output is active-low (your case): disable asserted = LOW
 if config.PROTECT_ACTIVE_HIGH:
-    protect_out.value(1)  # active-high disable: start disabled
+    protect_out.value(1)
 else:
-    protect_out.value(0)  # active-low disable: start disabled
+    protect_out.value(0)
 
-
-    
 # --- Task scheduling ---
 t_print = utime.ticks_ms()
 t_fast = utime.ticks_ms()
@@ -90,7 +84,7 @@ t_swr = utime.ticks_ms()
 t_therm = utime.ticks_ms()
 t_lcd = utime.ticks_ms()
 
-# Initialize latest so ctrl/display always have something valid
+# Initialize latest/state
 latest = {
     "pfwd_w": 0.0,
     "prfl_w": 0.0,
@@ -101,7 +95,7 @@ latest = {
     "vcc": 0.0,
     "temp_c": 0.0,
 }
-state = {"disable": True, "amp_enabled": False, "tripped": False, "reason": "OK"}
+state = {"disable": True, "amp_enabled": False, "tripped": False, "reason": "OK", "band_idx": 0}
 band_idx = config.BAND_DEFAULT_INDEX if hasattr(config, "BAND_DEFAULT_INDEX") else 0
 btn_level = 1
 
@@ -114,45 +108,43 @@ while True:
     btn_level = reset_in.value()
     state = ctrl.update(latest, now_ms=now, reset_btn_level=btn_level)
 
+    # publish band index for display
+    state["band_idx"] = band_idx
+
     # Drive protection output immediately
     if config.PROTECT_ACTIVE_HIGH:
         protect_out.value(1 if state["disable"] else 0)
     else:
         protect_out.value(0 if state["disable"] else 1)
 
-    # ---------------- FAST TELEMETRY (every 10 ms) ----------------
+    # (the rest of the main loop remains the same: telem reads, swr compute, lcd update, prints, sleep)
+    # FAST TELEMETRY
     if utime.ticks_diff(now, t_fast) >= config.FAST_TELEM_MS:
         t_fast = now
-
-        # These are Pico ADC reads: fast and cheap
         latest["vDrain"] = vdrain.read_drain_voltage()
         latest["iDrain"] = isense.read_current()
         latest["vcc"] = vcc.read_vcc_voltage()
 
-    # ---------------- RF TELEMETRY (every SWR window, e.g. 100 ms) ----------------
+    # RF TELEMETRY (SWR)
     if utime.ticks_diff(now, t_swr) >= config.SWR_AVG_WINDOW_MS:
         t_swr = now
-
-        # Blocking, windowed measurement
         rf = swr.compute(window_ms=config.SWR_AVG_WINDOW_MS)
-
-        # Merge RF results into latest without nuking other fields
         latest["pfwd_w"] = rf.get("pfwd_w", latest["pfwd_w"])
         latest["prfl_w"] = rf.get("prfl_w", latest["prfl_w"])
         latest["swr"] = rf.get("swr", latest["swr"])
         latest["samples"] = rf.get("samples", latest["samples"])
 
-    # ---------------- THERMAL TELEMETRY (every 500 ms) ----------------
+    # THERMAL TELEMETRY
     if utime.ticks_diff(now, t_therm) >= config.THERM_TELEM_MS:
         t_therm = now
         latest["temp_c"] = temp.read_temperature()
 
-    # ---------------- LCD (every ~250 ms) ----------------
-    if utime.ticks_diff(now, t_lcd) >= 250:
+    # LCD update
+    if utime.ticks_diff(now, t_lcd) >= dc.LCD_REFRESH_MS:
         t_lcd = now
         disp.update(latest, state, now_ms=now)
 
-    # ---------------- PRINT (as configured) ----------------
+    # PRINT
     if utime.ticks_diff(now, t_print) >= config.PRINT_PERIOD_MS:
         t_print = now
         print(
@@ -170,5 +162,4 @@ while True:
             "(n=", latest.get("samples", 0), ")"
         )
 
-    # Keep loop responsive and predictable
     utime.sleep_ms(5)
