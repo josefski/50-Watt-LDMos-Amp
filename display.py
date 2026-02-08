@@ -1,15 +1,12 @@
 # display.py
-# Minimal LCD renderer for telemetry + state
-#
-# Depends on lcd_i2c.py (your bring-up driver) and display_config.py
+# Updated LCD renderer for 16x2 I2C LCD.
 
 import utime
 import display_config as dc
 from lcd_i2c import LCD2004
 
 
-def _clamp_str(s, width=20):
-    # Pad/truncate to exactly LCD width for clean overwrites
+def _clamp_str(s, width=16):
     s = "" if s is None else str(s)
     if len(s) < width:
         return s + (" " * (width - len(s)))
@@ -17,56 +14,49 @@ def _clamp_str(s, width=20):
 
 
 def _fmt_num(val, width, decimals=1):
-    """
-    Formats a number into a fixed-width field.
-    Returns a string of exactly 'width' chars (right-justified).
-    """
     try:
         if decimals == 0:
             s = "{:d}".format(int(val))
         else:
             s = ("{0:." + str(decimals) + "f}").format(float(val))
     except:
-        s = "?"  # if missing/invalid
-
-    # Right-justify to requested width
+        s = "?"
     if len(s) < width:
         s = (" " * (width - len(s))) + s
     else:
-        s = s[-width:]  # take rightmost if too long
+        s = s[-width:]
     return s
 
 
 def _fmt_swr(swr):
     try:
         if swr == float("inf"):
-            return dc.SWR_INF_TEXT
-        # clamp display range a bit
+            return dc.SWR_INF_TEXT.rjust(4)
         if swr > 99.9:
-            return "99.9"
-        return _fmt_num(swr, width=4, decimals=1).strip()
+            return "99.9".rjust(4)
+        return _fmt_num(swr, width=4, decimals=1)
     except:
-        return "?"
+        return " ?  "
 
 
 class Display:
     """
-    Minimal display wrapper.
-    Call update(latest, state, now_ms) periodically (e.g., every LCD_REFRESH_MS).
+    Minimal display wrapper for 16x2 LCD.
+    Call update(latest, state, now_ms) periodically.
     """
 
     def __init__(self, i2c, addr=dc.LCD_I2C_ADDR, refresh_ms=dc.LCD_REFRESH_MS):
         self.lcd = LCD2004(i2c, addr=addr)
         self.refresh_ms = refresh_ms
         self._t_last = utime.ticks_ms()
-        self._last_lines = [""] * dc.LCD_ROWS
 
+        # Init splash, then clear
         self.lcd.clear()
-        self.lcd.write_line(0, "HF Amp Controller")
-        self.lcd.write_line(1, "Display init OK")
-        self.lcd.write_line(2, "Addr: " + hex(addr))
-        self.lcd.write_line(3, "")
+        # Fit startup lines into 16 characters
+        self.lcd.write_line(0, _clamp_str("HF Amp Controller", dc.LCD_COLS))
+        self.lcd.write_line(1, _clamp_str("Display init OK", dc.LCD_COLS))
         utime.sleep_ms(500)
+        self.lcd.clear()
 
     def should_refresh(self, now_ms=None):
         if now_ms is None:
@@ -75,8 +65,8 @@ class Display:
 
     def update(self, latest, state, now_ms=None):
         """
-        latest: dict with telemetry
-        state: dict from AmpControl.update()
+        latest: dict with telemetry (pfwd_w, prfl_w, swr, vDrain, iDrain, temp_c, ...)
+        state: dict from AmpControl.update(); expects 'band_idx' key (0..2)
         """
         if now_ms is None:
             now_ms = utime.ticks_ms()
@@ -86,52 +76,33 @@ class Display:
 
         self._t_last = now_ms
 
-        # Telemetry values (with robust defaults)
+        # Telemetry defaults
         pfwd = latest.get("pfwd_w", 0.0)
         swr = latest.get("swr", float("inf"))
         vd = latest.get("vDrain", 0.0)
         id_a = latest.get("iDrain", 0.0)
-        tc = latest.get("temp_c", None)
 
-        # State values
-        amp_on = bool(state.get("amp_enabled", False))
-        tripped = bool(state.get("tripped", False))
-        reason = state.get("reason", "OK")
+        # Format values
+        pfwd_s = _fmt_num(pfwd, width=4, decimals=0)   # integer W
+        swr_s = _fmt_swr(swr)                          # width 4
+        id_s = _fmt_num(id_a, width=4, decimals=1)     # A with 1 decimal
+        vd_s = _fmt_num(vd, width=4, decimals=1)       # V with 1 decimal
 
-        # Build line 0: PFWD and SWR
-        pfwd_s = _fmt_num(pfwd, width=5, decimals=0).strip()
-        swr_s = _fmt_swr(swr)
-        line0 = dc.LINE0.format(pfwd=pfwd_s, swr=swr_s)
+        # Band label
+        band_idx = int(state.get("band_idx", 0)) if state is not None else 0
+        try:
+            band_label = dc.BAND_LABELS[band_idx]
+        except:
+            band_label = dc.BAND_LABELS[0]
 
-        # Build line 1: V/I
-        vd_s = _fmt_num(vd, width=5, decimals=1).strip()
-        id_s = _fmt_num(id_a, width=4, decimals=1).strip()
-        line1 = dc.LINE1.format(vd=vd_s, id=id_s)
+        # Build lines from templates and clamp
+        line0 = dc.LINE0.format(swr=swr_s, pfwd=pfwd_s, band=band_label)
+        line1 = dc.LINE1.format(id=id_s, vd=vd_s)
 
-        # Build line 2: Temp
-        if tc is None:
-            tc_s = " ? "
-        else:
-            tc_s = _fmt_num(tc, width=5, decimals=1).strip()
-        line2 = dc.LINE2.format(tc=tc_s)
+        line0 = _clamp_str(line0, dc.LCD_COLS)
+        line1 = _clamp_str(line1, dc.LCD_COLS)
 
-        # Build line 3: status
-        if tripped:
-            # Keep it simple and readable; LCD is 20 chars
-            # Example: "FAULT:THERM_OT     "
-            line3 = (dc.STATUS_FAULT_PREFIX + str(reason))
-        else:
-            line3 = dc.STATUS_OK_ON if amp_on else dc.STATUS_OK_OFF
-
-        lines = [
-            _clamp_str(line0, dc.LCD_COLS),
-            _clamp_str(line1, dc.LCD_COLS),
-            _clamp_str(line2, dc.LCD_COLS),
-            _clamp_str(line3, dc.LCD_COLS),
-        ]
-
-        # Only write lines that changed (reduces flicker and I2C traffic)
-        for r in range(dc.LCD_ROWS):
-            if lines[r] != self._last_lines[r]:
-                self.lcd.write_line(r, lines[r])
-                self._last_lines[r] = lines[r]
+        # Write to the LCD
+        self.lcd.write_line(0, line0)
+        if dc.LCD_ROWS > 1:
+            self.lcd.write_line(1, line1)
