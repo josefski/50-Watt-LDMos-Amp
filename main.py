@@ -2,6 +2,7 @@
 from machine import I2C, Pin
 import utime
 import display
+import display_config
 
 import a2d
 import config
@@ -147,9 +148,10 @@ while True:
         t_therm = now
         latest["temp_c"] = temp.read_temperature()
 
-    # ---------------- LCD (every ~250 ms) ----------------
-    if utime.ticks_diff(now, t_lcd) >= 250:
+    # ---------------- LCD (every ~LCD_REFRESH_MS) ----------------
+    if utime.ticks_diff(now, t_lcd) >= display_config.LCD_REFRESH_MS:
         t_lcd = now
+        state["band_idx"] = band_idx
         disp.update(latest, state, now_ms=now)
 
     # ---------------- PRINT (as configured) ----------------
