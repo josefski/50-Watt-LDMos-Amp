@@ -67,6 +67,7 @@ class Display:
         """
         latest: dict with telemetry (pfwd_w, prfl_w, swr, vDrain, iDrain, temp_c, ...)
         state: dict from AmpControl.update(); expects 'band_idx' key (0..2)
+               and optionally 'tune_active' / 'tune_phase' from TuneMode.
         """
         if now_ms is None:
             now_ms = utime.ticks_ms()
@@ -76,33 +77,57 @@ class Display:
 
         self._t_last = now_ms
 
-        # Telemetry defaults
+        if state is not None and state.get("tune_active"):
+            self._render_tune(latest, state)
+        else:
+            self._render_normal(latest, state)
+
+    def _render_normal(self, latest, state):
         pfwd = latest.get("pfwd_w", 0.0)
         swr = latest.get("swr", float("inf"))
         vd = latest.get("vDrain", 0.0)
         id_a = latest.get("iDrain", 0.0)
 
-        # Format values
-        pfwd_s = _fmt_num(pfwd, width=4, decimals=0)   # integer W
-        swr_s = _fmt_swr(swr)                          # width 4
-        id_s = _fmt_num(id_a, width=4, decimals=1)     # A with 1 decimal
-        vd_s = _fmt_num(vd, width=4, decimals=1)       # V with 1 decimal
+        pfwd_s = _fmt_num(pfwd, width=4, decimals=0)
+        swr_s = _fmt_swr(swr)
+        id_s = _fmt_num(id_a, width=4, decimals=1)
+        vd_s = _fmt_num(vd, width=4, decimals=1)
 
-        # Band label
         band_idx = int(state.get("band_idx", 0)) if state is not None else 0
         try:
             band_label = dc.BAND_LABELS[band_idx]
         except:
             band_label = dc.BAND_LABELS[0]
 
-        # Build lines from templates and clamp
-        line0 = dc.LINE0.format(swr=swr_s, pfwd=pfwd_s, band=band_label)
-        line1 = dc.LINE1.format(id=id_s, vd=vd_s)
+        line0 = _clamp_str(dc.LINE0.format(swr=swr_s, pfwd=pfwd_s, band=band_label), dc.LCD_COLS)
+        line1 = _clamp_str(dc.LINE1.format(id=id_s, vd=vd_s), dc.LCD_COLS)
 
-        line0 = _clamp_str(line0, dc.LCD_COLS)
-        line1 = _clamp_str(line1, dc.LCD_COLS)
+        self.lcd.write_line(0, line0)
+        if dc.LCD_ROWS > 1:
+            self.lcd.write_line(1, line1)
 
-        # Write to the LCD
+    def _render_tune(self, latest, state):
+        """Dedicated display for ATU-100 tuning mode.
+
+        Line 0 (16 chars): "TUNE MODE  B:40 "
+        Line 1 (16 chars): "TUNING  SWR:1.2 "  (phase 8 chars + "SWR:" + 4-char swr)
+        """
+        swr = latest.get("swr", float("inf"))
+        swr_s = _fmt_swr(swr)
+
+        band_idx = int(state.get("band_idx", 0)) if state is not None else 0
+        try:
+            band_label = dc.BAND_LABELS[band_idx]
+        except:
+            band_label = dc.BAND_LABELS[0]
+
+        phase = state.get("tune_phase", "TUNING")
+        # phase_label is always 8 chars so "SWR:" + 4-char swr fills the line exactly
+        phase_label = dc.TUNE_PHASE_LABELS.get(phase, "TUNING  ")
+
+        line0 = _clamp_str("TUNE MODE  B:{}".format(band_label), dc.LCD_COLS)
+        line1 = _clamp_str("{}SWR:{}".format(phase_label, swr_s), dc.LCD_COLS)
+
         self.lcd.write_line(0, line0)
         if dc.LCD_ROWS > 1:
             self.lcd.write_line(1, line1)
