@@ -97,38 +97,3 @@ BAND_DEFAULT_INDEX = 0         # start with first filter selected
 FAST_TELEM_MS = 10       # vDrain/iDrain/vcc sampling cadence
 THERM_TELEM_MS = 500     # temperature sampling cadence (slow is fine)
 
-# --- ATU-100 Tuning Mode ---
-# Wiring (all GP pins currently free):
-#   GP8  - tune mode button (momentary, shorts to GND)
-#   GP9  - attenuator bypass relay output (HIGH = attenuator IN)
-#   GP10 - ATU-100 tune trigger output (pulse HIGH to start tune cycle)
-#   GP11 - ATU-100 busy/done input (ATU-100 pulls LOW while tuning)
-#           Set TUNE_BUSY_GPIO = None if not wired; falls back to timeout.
-#
-# ATU-100 tune trigger: connect GP10 to the ATU-100 "KEY" / tune input pin.
-# ATU-100 busy output: connect GP11 to the ATU-100 status LED cathode or
-#   dedicated busy output if your firmware version provides one.
-#
-# Attenuator relay: energise to insert attenuator in the amp input path.
-#   Sized to drop output to ~5-10 W during tuning (e.g. 10 dB pad).
-
-TUNE_BTN_GPIO         = 8       # GP8: momentary pushbutton to initiate tune
-TUNE_BTN_ACTIVE_LOW   = True    # button shorts pin to GND
-TUNE_BTN_PULL         = "UP"
-TUNE_BTN_DEBOUNCE_MS  = 20
-
-TUNE_ATT_GPIO         = 9       # GP9: attenuator relay output
-TUNE_ATT_ACTIVE_HIGH  = True    # HIGH = relay energised = attenuator IN path
-
-TUNE_TRIG_GPIO        = 10      # GP10: ATU-100 tune trigger
-TUNE_TRIG_ACTIVE_HIGH = True    # HIGH = trigger asserted
-
-TUNE_BUSY_GPIO        = 11      # GP11: ATU-100 busy/done input (None to disable)
-TUNE_BUSY_PULL        = "UP"    # pull-up; ATU-100 drives low while tuning
-TUNE_BUSY_ACTIVE_LOW  = True    # LOW = still tuning, HIGH = done
-
-# Timing
-TUNE_ATT_SETTLE_MS    = 50      # relay mechanical settle time (ms)
-TUNE_TRIG_PULSE_MS    = 150     # ATU-100 tune trigger pulse width (ms)
-TUNE_TIMEOUT_MS       = 8000    # hard timeout waiting for ATU-100 to finish (ms)
-

@@ -3,7 +3,6 @@
 from machine import I2C, Pin
 import utime
 import display
-import display_config as dc
 
 import a2d
 import config
@@ -14,7 +13,6 @@ import Vcc
 import control
 import thermistor
 import band_switch
-import tune_mode
 
 # --- Hardware bring-up ---
 i2c = I2C(
@@ -72,7 +70,6 @@ else:
     reset_in = Pin(config.RESET_GPIO, Pin.IN, Pin.PULL_DOWN)
 
 ctrl = control.AmpControl(config)
-tuner = tune_mode.TuneMode(config)
 
 # Default OFF at boot => assert disable output immediately
 if config.PROTECT_ACTIVE_HIGH:
@@ -98,11 +95,9 @@ latest = {
     "vcc": 0.0,
     "temp_c": 0.0,
 }
-state = {"disable": True, "amp_enabled": False, "tripped": False, "reason": "OK", "band_idx": 0,
-         "tune_active": False, "tune_phase": "IDLE"}
+state = {"disable": True, "amp_enabled": False, "tripped": False, "reason": "OK", "band_idx": 0}
 band_idx = config.BAND_DEFAULT_INDEX if hasattr(config, "BAND_DEFAULT_INDEX") else 0
 btn_level = 1
-tune_state = {"active": False, "phase": "IDLE"}
 
 while True:
     now = utime.ticks_ms()
@@ -110,18 +105,11 @@ while True:
     # ---------------- FAST LOOP (every pass) ----------------
     band_idx = bands.update(now_ms=now)
 
-    # Tune mode: evaluated first using last iteration's state (5 ms lag is
-    # negligible vs relay settle times). Returns active flag and phase name.
-    tune_state = tuner.update(state, now_ms=now)
-
     btn_level = reset_in.value()
-    state = ctrl.update(latest, now_ms=now, reset_btn_level=btn_level,
-                        tune_active=tune_state["active"])
+    state = ctrl.update(latest, now_ms=now, reset_btn_level=btn_level)
 
-    # publish band index and tune state for display
+    # publish band index for display
     state["band_idx"] = band_idx
-    state["tune_active"] = tune_state["active"]
-    state["tune_phase"] = tune_state["phase"]
 
     # Drive protection output immediately
     if config.PROTECT_ACTIVE_HIGH:
@@ -164,7 +152,6 @@ while True:
             "disable=", state["disable"],
             "AMP=", "ON" if state["amp_enabled"] else "OFF",
             "PROT=", ("TRIP:" + state["reason"]) if state["tripped"] else "OK",
-            "TUNE=", tune_state["phase"] if tune_state["active"] else "OFF",
             "Pfwd=", latest.get("pfwd_w", 0.0), "W",
             "SWR=", latest.get("swr", float("inf")),
             "Vcc=", latest.get("vcc", 0.0),

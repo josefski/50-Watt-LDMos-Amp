@@ -38,7 +38,7 @@ class AmpControl:
         # level is raw GPIO read (0/1)
         return (level == 0) if self.cfg.RESET_ACTIVE_LOW else (level == 1)
 
-    def _fault_reason(self, telemetry, tune_active=False):
+    def _fault_reason(self, telemetry):
         v_drain = telemetry.get("vDrain", 0.0)
         i_drain = telemetry.get("iDrain", 0.0)
         vcc     = telemetry.get("vcc", 0.0)
@@ -49,19 +49,21 @@ class AmpControl:
 
         if i_drain > self.cfg.PROTECT_IDRAIN_MAX_A:
             return True, "IDRAIN_OC"
-
-        # Skip the forward-power efficiency check while the attenuator is in.
-        # The attenuator cuts RF output but DC draw stays nominal, so this rule
-        # would false-trip on every tune cycle. VDRAIN_OV and IDRAIN_OC above
-        # remain active throughout tuning as genuine hard-limit guards.
-        if not tune_active:
-            total_p = vcc * i_drain
-            if (i_drain >= self.cfg.PROTECT_MIN_I_FOR_EFF_A) and (total_p >= self.cfg.PROTECT_MIN_TOTAL_POWER_W):
-                min_pfwd = self.cfg.PROTECT_FWD_MIN_FRACTION * total_p
-                if pfwd < min_pfwd:
-                    return True, "FWD_LOW_VS_VI"
+        
+        total_p = vcc * i_drain
+        if (i_drain >= self.cfg.PROTECT_MIN_I_FOR_EFF_A) and (total_p >= self.cfg.PROTECT_MIN_TOTAL_POWER_W):
+            min_pfwd = self.cfg.PROTECT_FWD_MIN_FRACTION * total_p
+            if pfwd < min_pfwd:
+                return True, "FWD_LOW_VS_VI"
 
         return False, "OK"
+    
+        # Thermal over-temperature (handled with debounce in update(), not here)
+        # We return a fault indication here if temp is over threshold; update()
+        # will apply the time qualification.
+        temp_c = telemetry.get("temp_c", None)
+        if temp_c is not None and temp_c >= self.cfg.PROTECT_TEMP_MAX_C:
+            return True, "THERM_OT"
 
 
     def _debounced_button_event(self, now_ms, level):
@@ -96,7 +98,7 @@ class AmpControl:
 
         return False
 
-    def update(self, telemetry, now_ms, reset_btn_level, tune_active=False):
+    def update(self, telemetry, now_ms, reset_btn_level):
         """
         Returns a dict describing the control state:
           {
@@ -105,12 +107,9 @@ class AmpControl:
             "tripped": bool,
             "reason": str
           }
-
-        tune_active: pass True while a TuneMode cycle is in progress so that
-                     the FWD_LOW_VS_VI efficiency check is suppressed.
         """
         # 1) Evaluate electrical protection (fast debounce) and latch on trip
-        is_fault, reason = self._fault_reason(telemetry, tune_active=tune_active)
+        is_fault, reason = self._fault_reason(telemetry)
 
         if not self.tripped:
             if is_fault:
