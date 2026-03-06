@@ -18,6 +18,7 @@ class BandSwitch:
 
         # --- Outputs (push-pull) ---
         self.pins = [Pin(gp, Pin.OUT) for gp in cfg.BAND_GPIO_PINS]
+        self._active_high = getattr(cfg, "BAND_ACTIVE_HIGH", True)
 
         # Default selection
         self.index = int(getattr(cfg, "BAND_DEFAULT_INDEX", 0)) % len(self.pins)
@@ -45,11 +46,7 @@ class BandSwitch:
         If BAND_ACTIVE_HIGH is True:  ON=1, OFF=0
         If BAND_ACTIVE_HIGH is False: ON=0, OFF=1 (active-low hardware)
         """
-        active_high = getattr(self.cfg, "BAND_ACTIVE_HIGH", True)
-        if active_high:
-            pin.value(1 if on else 0)
-        else:
-            pin.value(0 if on else 1)
+        pin.value(1 if on else 0) if self._active_high else pin.value(0 if on else 1)
 
     def _apply_outputs(self):
         # Force all OFF, then selected ON (one-hot)

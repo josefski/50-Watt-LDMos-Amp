@@ -1,40 +1,7 @@
 # swr_calc.py
 import math
-
-# ADS1115 data rate codes -> SPS (matches a2d.py constants)
-_DR_SPS = {
-    0x0000: 8,
-    0x0020: 16,
-    0x0040: 32,
-    0x0060: 64,
-    0x0080: 128,
-    0x00A0: 250,
-    0x00C0: 475,
-    0x00E0: 860,
-}
-
-class PiecewiseLinear:
-    def __init__(self, x, y):
-        if len(x) != len(y) or len(x) < 2:
-            raise ValueError("Need >=2 points with matching x/y lengths")
-        pairs = sorted(zip(x, y), key=lambda t: t[0])
-        self.x = [p[0] for p in pairs]
-        self.y = [p[1] for p in pairs]
-
-    def interp(self, xq):
-        if xq <= self.x[0]:
-            return self.y[0]
-        if xq >= self.x[-1]:
-            return self.y[-1]
-        for i in range(len(self.x) - 1):
-            x0, x1 = self.x[i], self.x[i + 1]
-            if x0 <= xq <= x1:
-                y0, y1 = self.y[i], self.y[i + 1]
-                if x1 == x0:
-                    return y0
-                t = (xq - x0) / (x1 - x0)
-                return y0 + t * (y1 - y0)
-        return self.y[-1]
+from interp import PiecewiseLinear
+from a2d import _DR_SPS
 
 def _try_float(s):
     try:

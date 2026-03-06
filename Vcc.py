@@ -13,18 +13,8 @@ class Vcc:
         scale: multiplier to convert ADC pin voltage to Vcc
         """
         self.adc = ADC(adc_channel)
-        self.vref = vref
-        self.scale = scale
-
-    def read_adc_raw(self):
-        """Returns raw 16-bit ADC reading (0–65535)."""
-        return self.adc.read_u16()
-
-    def read_adc_voltage(self):
-        """Returns measured voltage at the ADC pin (before scaling)."""
-        raw = self.read_adc_raw()
-        return (raw / 65535.0) * self.vref
+        self._K = vref * scale / 65535.0
 
     def read_vcc_voltage(self):
         """Returns scaled Vcc voltage."""
-        return self.read_adc_voltage() * self.scale
+        return self.adc.read_u16() * self._K
