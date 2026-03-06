@@ -1,8 +1,5 @@
-# main.py (display/band state changes only shown; rest of main preserved)
-
 from machine import I2C, Pin
 import utime
-import display
 
 import a2d
 import config
@@ -13,6 +10,10 @@ import Vcc
 import control
 import thermistor
 import band_switch
+import keyer
+import display
+import display_config as dc
+
 
 # --- Hardware bring-up ---
 i2c = I2C(
@@ -26,7 +27,10 @@ ads = a2d.ADS1115(i2c, address=config.ADS1115_ADDR)
 if not ads.probe():
     raise RuntimeError("ADS1115 not found on I2C")
 
-vdrain = v_drain.VDrain(adc_channel=config.VDRAIN_ADC_CH, scale=config.VDRAIN_SCALE)
+vdrain = v_drain.VDrain(
+    adc_channel=config.VDRAIN_ADC_CH,
+    scale=config.VDRAIN_SCALE
+)
 
 isense = current_sense.CurrentSense(
     adc_channel=config.CURRENT_ADC_CH,
@@ -53,38 +57,49 @@ temp = thermistor.ThermistorADS(
     data_rate=config.THERM_ADS_DATA_RATE
 )
 
-vcc = Vcc.Vcc(adc_channel=config.VCC_ADC_CH, scale=config.VCC_SCALE)
+vcc = Vcc.Vcc(
+    adc_channel=config.VCC_ADC_CH,
+    scale=config.VCC_SCALE
+)
 
-# LCD I2C on GP2 (SDA) / GP3 (SCL)
+# --- LCD ---
 i2c_lcd = I2C(1, sda=Pin(2), scl=Pin(3), freq=100000)
 disp = display.Display(i2c_lcd)
 
-# --- Control / Protection I/O ---
+# --- Control I/O ---
 protect_out = Pin(config.PROTECT_GPIO, Pin.OUT)
-
 bands = band_switch.BandSwitch(config)
 
-if config.RESET_PULL == "UP":
-    reset_in = Pin(config.RESET_GPIO, Pin.IN, Pin.PULL_UP)
-else:
-    reset_in = Pin(config.RESET_GPIO, Pin.IN, Pin.PULL_DOWN)
+reset_in = Pin(
+    config.RESET_GPIO,
+    Pin.IN,
+    Pin.PULL_UP if config.RESET_PULL == "UP" else Pin.PULL_DOWN
+)
+
+tx_en_out = Pin(config.TX_EN_GPIO, Pin.OUT)
+
+# Default TX_EN OFF at boot
+tx_en_out.value(0 if config.TX_EN_ACTIVE_HIGH else 1)
+
+ptt = keyer.Keyer(
+    config.KEYER_GPIO,
+    active_low=config.KEYER_ACTIVE_LOW,
+    pull=config.KEYER_PULL
+)
+ptt._debounce_ms = config.KEYER_DEBOUNCE_MS
 
 ctrl = control.AmpControl(config)
 
-# Default OFF at boot => assert disable output immediately
-if config.PROTECT_ACTIVE_HIGH:
-    protect_out.value(1)
-else:
-    protect_out.value(0)
+# Default OFF at boot => assert disable output
+protect_out.value(1 if config.PROTECT_ACTIVE_HIGH else 0)
 
-# --- Task scheduling ---
+# --- Scheduling ---
 t_print = utime.ticks_ms()
 t_fast = utime.ticks_ms()
 t_swr = utime.ticks_ms()
 t_therm = utime.ticks_ms()
 t_lcd = utime.ticks_ms()
 
-# Initialize latest/state
 latest = {
     "pfwd_w": 0.0,
     "prfl_w": 0.0,
@@ -94,72 +109,153 @@ latest = {
     "iDrain": 0.0,
     "vcc": 0.0,
     "temp_c": 0.0,
+    "ptt": False,
+
+    # keep RF volts as state (do NOT reset each loop)
+    "vfwd_v": 0.0,
+    "vrfl_v": 0.0,
 }
-state = {"disable": True, "amp_enabled": False, "tripped": False, "reason": "OK", "band_idx": 0}
-band_idx = config.BAND_DEFAULT_INDEX if hasattr(config, "BAND_DEFAULT_INDEX") else 0
-btn_level = 1
+
+state = {
+    "disable": True,
+    "amp_enabled": False,
+    "tripped": False,
+    "reason": "OK",
+    "band_idx": config.BAND_DEFAULT_INDEX,
+    "ptt": False,
+}
+
+band_idx = config.BAND_DEFAULT_INDEX
+
+# IIR filter coefficient for RF detector volts (0<alpha<=1). Higher = faster response, noisier.
+alpha = 0.2
+
+# --- Hot-path aliases / cached constants ---
+ticks_ms = utime.ticks_ms
+ticks_diff = utime.ticks_diff
+sleep_ms = utime.sleep_ms
+
+read_ptt = ptt.update
+is_keyed = ptt.is_keyed
+read_reset = reset_in.value
+update_band = bands.update
+update_ctrl = ctrl.update
+update_display = disp.update
+
+read_vdrain = vdrain.read_drain_voltage
+read_idrain = isense.read_current
+read_vcc = vcc.read_vcc_voltage
+read_temp = temp.read_temperature
+read_ads_voltage = ads.read_voltage
+interp_watts = swr.v_to_w.interp
+swr_from_powers = swr_calc.swr_from_powers
+
+fast_telem_ms = config.FAST_TELEM_MS
+swr_avg_window_ms = config.SWR_AVG_WINDOW_MS
+therm_telem_ms = config.THERM_TELEM_MS
+lcd_refresh_ms = dc.LCD_REFRESH_MS
+print_period_ms = config.PRINT_PERIOD_MS
+
+ads_fwd_ch = config.ADS_FWD_CH
+ads_rfl_ch = config.ADS_RFL_CH
+ads_pga = config.ADS_PGA
+ads_data_rate = config.ADS_DATA_RATE
+
+protect_level_when_disabled = 1 if config.PROTECT_ACTIVE_HIGH else 0
+protect_level_when_enabled = 0 if config.PROTECT_ACTIVE_HIGH else 1
+tx_level_when_enabled = 1 if config.TX_EN_ACTIVE_HIGH else 0
+tx_level_when_disabled = 0 if config.TX_EN_ACTIVE_HIGH else 1
+
+last_protect_level = None
+last_tx_level = None
 
 while True:
-    now = utime.ticks_ms()
+    now = ticks_ms()
 
-    # ---------------- FAST LOOP (every pass) ----------------
-    band_idx = bands.update(now_ms=now)
+    # --- FAST LOOP ---
+    read_ptt(now_ms=now)
+    keyed = is_keyed()
 
-    btn_level = reset_in.value()
-    state = ctrl.update(latest, now_ms=now, reset_btn_level=btn_level)
+    if not keyed:
+        band_idx = update_band(now_ms=now)
 
-    # publish band index for display
+    state = update_ctrl(latest, now_ms=now, reset_btn_level=read_reset())
     state["band_idx"] = band_idx
+    state["ptt"] = keyed
+    latest["ptt"] = keyed
 
-    # Drive protection output immediately
-    if config.PROTECT_ACTIVE_HIGH:
-        protect_out.value(1 if state["disable"] else 0)
-    else:
-        protect_out.value(0 if state["disable"] else 1)
+    # Drive protection output (disable asserted when state["disable"] is True)
+    protect_level = protect_level_when_disabled if state["disable"] else protect_level_when_enabled
+    if protect_level != last_protect_level:
+        protect_out.value(protect_level)
+        last_protect_level = protect_level
 
-    # (the rest of the main loop remains the same: telem reads, swr compute, lcd update, prints, sleep)
-    # FAST TELEMETRY
-    if utime.ticks_diff(now, t_fast) >= config.FAST_TELEM_MS:
+    # TX enable policy: keyed AND amp allowed
+    tx_en = bool(keyed and (not state["disable"]))
+    tx_level = tx_level_when_enabled if tx_en else tx_level_when_disabled
+    if tx_level != last_tx_level:
+        tx_en_out.value(tx_level)
+        last_tx_level = tx_level
+
+    # --- FAST TELEMETRY ---
+    if ticks_diff(now, t_fast) >= fast_telem_ms:
         t_fast = now
-        latest["vDrain"] = vdrain.read_drain_voltage()
-        latest["iDrain"] = isense.read_current()
-        latest["vcc"] = vcc.read_vcc_voltage()
+        latest["vDrain"] = read_vdrain()
+        latest["iDrain"] = read_idrain()
+        latest["vcc"] = read_vcc()
 
-    # RF TELEMETRY (SWR)
-    if utime.ticks_diff(now, t_swr) >= config.SWR_AVG_WINDOW_MS:
+    # --- RF TELEMETRY (non-blocking) ---
+    if ticks_diff(now, t_swr) >= swr_avg_window_ms:
         t_swr = now
-        rf = swr.compute(window_ms=config.SWR_AVG_WINDOW_MS)
-        latest["pfwd_w"] = rf.get("pfwd_w", latest["pfwd_w"])
-        latest["prfl_w"] = rf.get("prfl_w", latest["prfl_w"])
-        latest["swr"] = rf.get("swr", latest["swr"])
-        latest["samples"] = rf.get("samples", latest["samples"])
 
-    # THERMAL TELEMETRY
-    if utime.ticks_diff(now, t_therm) >= config.THERM_TELEM_MS:
+        vfwd = read_ads_voltage(ads_fwd_ch, pga=ads_pga, data_rate=ads_data_rate)
+        vrfl = read_ads_voltage(ads_rfl_ch, pga=ads_pga, data_rate=ads_data_rate)
+
+        # IIR low-pass on detector volts
+        latest["vfwd_v"] = latest["vfwd_v"] + alpha * (vfwd - latest["vfwd_v"])
+        latest["vrfl_v"] = latest["vrfl_v"] + alpha * (vrfl - latest["vrfl_v"])
+
+        # Volts -> Watts using calibration curve
+        pfwd_w = interp_watts(latest["vfwd_v"])
+        prfl_w = interp_watts(latest["vrfl_v"])
+        if pfwd_w < 0.0:
+            pfwd_w = 0.0
+        if prfl_w < 0.0:
+            prfl_w = 0.0
+
+        latest["pfwd_w"] = pfwd_w
+        latest["prfl_w"] = prfl_w
+        latest["swr"] = swr_from_powers(pfwd_w, prfl_w)
+        latest["samples"] = 1
+
+    # --- THERMAL ---
+    if ticks_diff(now, t_therm) >= therm_telem_ms:
         t_therm = now
-        latest["temp_c"] = temp.read_temperature()
+        latest["temp_c"] = read_temp()
 
-    # LCD update
-    if utime.ticks_diff(now, t_lcd) >= dc.LCD_REFRESH_MS:
+    # --- LCD ---
+    if ticks_diff(now, t_lcd) >= lcd_refresh_ms:
         t_lcd = now
-        disp.update(latest, state, now_ms=now)
+        update_display(latest, state, now_ms=now)
 
-    # PRINT
-    if utime.ticks_diff(now, t_print) >= config.PRINT_PERIOD_MS:
+    # --- PRINT ---
+    if ticks_diff(now, t_print) >= print_period_ms:
         t_print = now
         print(
-            "btn=", btn_level,
-            "disable=", state["disable"],
+            "PTT=", keyed,
             "AMP=", "ON" if state["amp_enabled"] else "OFF",
             "PROT=", ("TRIP:" + state["reason"]) if state["tripped"] else "OK",
-            "Pfwd=", latest.get("pfwd_w", 0.0), "W",
-            "SWR=", latest.get("swr", float("inf")),
-            "Vcc=", latest.get("vcc", 0.0),
-            "iDrain=", latest.get("iDrain", 0.0),
-            "vDrain=", latest.get("vDrain", 0.0),
-            "T=", latest.get("temp_c", 0.0), "C",
+            "Pfwd=", latest["pfwd_w"], "W",
+            "SWR=", latest["swr"],
+            "Vfwd=", latest["vfwd_v"], "V",
+            "Vrfl=", latest["vrfl_v"], "V",
+            "Vcc=", latest["vcc"],
+            "I=", latest["iDrain"],
+            "Vd=", latest["vDrain"],
+            "T=", latest["temp_c"],
             "BAND=", band_idx + 1,
-            "(n=", latest.get("samples", 0), ")"
+            "FWD_CH=", ads_fwd_ch,
+            "RFL_CH=", ads_rfl_ch
         )
 
-    utime.sleep_ms(5)
+    sleep_ms(5)

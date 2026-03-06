@@ -14,7 +14,7 @@ LCD_REFRESH_MS = 250
 SWR_INF_TEXT = "inf"
 
 # Band labels (displayed for each one-hot band index 0..2)
-BAND_LABELS = ("40", "20", "10")
+BAND_LABELS = ("10", "20", "40")
 
 # Line templates for 16 chars:
 # Keys used in templates:
