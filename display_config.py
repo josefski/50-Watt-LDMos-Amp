@@ -23,5 +23,5 @@ BAND_LABELS = ("10", "20", "40")
 #   ia - 4-char current (1 decimal)
 #   vd - 4-char drain voltage (1 decimal)
 #   band - band label ("40"/"20"/"10")
-LINE0 = "S:{swr} P:{pfwd}W B:{band}"
+LINE0 = "S:{swr} P:{pfwd}W{band}"
 LINE1 = "I:{ia}A D:{vd}V"
