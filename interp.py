@@ -1,8 +1,6 @@
 # interp.py
 # Shared piecewise-linear interpolator used by swr_calc and thermistor.
 
-import bisect
-
 
 class PiecewiseLinear:
     def __init__(self, x, y):
@@ -19,9 +17,16 @@ class PiecewiseLinear:
             return y[0]
         if xq >= x[-1]:
             return y[-1]
-        i = bisect.bisect_right(x, xq) - 1
-        x0, x1 = x[i], x[i + 1]
+        # Binary search for the interval containing xq
+        lo, hi = 0, len(x) - 1
+        while lo < hi - 1:
+            mid = (lo + hi) >> 1
+            if x[mid] <= xq:
+                lo = mid
+            else:
+                hi = mid
+        x0, x1 = x[lo], x[hi]
         if x1 == x0:
-            return y[i]
+            return y[lo]
         t = (xq - x0) / (x1 - x0)
-        return y[i] + t * (y[i + 1] - y[i])
+        return y[lo] + t * (y[hi] - y[lo])
