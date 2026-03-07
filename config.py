@@ -23,7 +23,7 @@ CURRENT_ADC_CH = 1  # ADC1 / GP27
 VCC_ADC_CH = 2      # ADC2 / GP28
 
 # --- Scaling ---
-VDRAIN_SCALE = 16.6666
+VDRAIN_SCALE = 17.5853  # calibrated: was 16.6666 (read 12.7V, actual 13.4V)
 VCC_SCALE = 15.05
 
 CURRENT_OFFSET_V = 0.5

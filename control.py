@@ -39,17 +39,17 @@ class AmpControl:
         return (level == 0) if self.cfg.RESET_ACTIVE_LOW else (level == 1)
 
     def _fault_reason(self, telemetry):
-        v_drain = telemetry.get("vDrain", 0.0)
-        i_drain = telemetry.get("iDrain", 0.0)
-        vcc     = telemetry.get("vcc", 0.0)
-        pfwd    = telemetry.get("pfwd_w", 0.0)
+        v_drain = telemetry["vDrain"]
+        i_drain = telemetry["iDrain"]
+        vcc     = telemetry["vcc"]
+        pfwd    = telemetry["pfwd_w"]
 
         if v_drain > self.cfg.PROTECT_VDRAIN_MAX_V:
             return True, "VDRAIN_OV"
 
         if i_drain > self.cfg.PROTECT_IDRAIN_MAX_A:
             return True, "IDRAIN_OC"
-        
+
         total_p = vcc * i_drain
         if (i_drain >= self.cfg.PROTECT_MIN_I_FOR_EFF_A) and (total_p >= self.cfg.PROTECT_MIN_TOTAL_POWER_W):
             min_pfwd = self.cfg.PROTECT_FWD_MIN_FRACTION * total_p
@@ -57,13 +57,6 @@ class AmpControl:
                 return True, "FWD_LOW_VS_VI"
 
         return False, "OK"
-    
-        # Thermal over-temperature (handled with debounce in update(), not here)
-        # We return a fault indication here if temp is over threshold; update()
-        # will apply the time qualification.
-        temp_c = telemetry.get("temp_c", None)
-        if temp_c is not None and temp_c >= self.cfg.PROTECT_TEMP_MAX_C:
-            return True, "THERM_OT"
 
 
     def _debounced_button_event(self, now_ms, level):
@@ -123,8 +116,8 @@ class AmpControl:
                 self._fault_start_ms = None
 
         # 2) Thermal protection (slow debounce) - trips only if sustained overtemp
-        temp_c = telemetry.get("temp_c", None)
-        overtemp = (temp_c is not None) and (temp_c >= self.cfg.PROTECT_TEMP_MAX_C)
+        temp_c = telemetry["temp_c"]
+        overtemp = temp_c >= self.cfg.PROTECT_TEMP_MAX_C
 
         if not self.tripped:
             if overtemp:

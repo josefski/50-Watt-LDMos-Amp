@@ -258,4 +258,4 @@ while True:
             "RFL_CH=", ads_rfl_ch
         )
 
-    sleep_ms(5)
+    sleep_ms(1)

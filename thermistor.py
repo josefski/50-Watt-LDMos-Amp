@@ -16,29 +16,7 @@
 #   3) build interpolator Vadc -> Temp_F
 #   4) convert to Celsius for protection
 
-class PiecewiseLinear:
-    def __init__(self, x, y):
-        if len(x) != len(y) or len(x) < 2:
-            raise ValueError("Interpolator requires >=2 points")
-        pairs = sorted(zip(x, y), key=lambda t: t[0])
-        self.x = [p[0] for p in pairs]
-        self.y = [p[1] for p in pairs]
-
-    def interp(self, xq):
-        # Clamp
-        if xq <= self.x[0]:
-            return self.y[0]
-        if xq >= self.x[-1]:
-            return self.y[-1]
-
-        for i in range(len(self.x) - 1):
-            x0, x1 = self.x[i], self.x[i + 1]
-            if x0 <= xq <= x1:
-                y0, y1 = self.y[i], self.y[i + 1]
-                t = (xq - x0) / (x1 - x0)
-                return y0 + t * (y1 - y0)
-
-        return self.y[-1]
+from interp import PiecewiseLinear
 
 
 def _to_floats(parts):
@@ -89,12 +67,13 @@ def resistance_to_vadc(r_ntc, vref, r_fixed):
 class ThermistorADS:
     def __init__(self, ads1115, channel, csv_path,
                  vref=3.3, r_fixed=4700.0, pga=None, data_rate=None):
+        from a2d import PGA_4_096V, DR_250SPS
         self.ads = ads1115
         self.ch = channel
         self.vref = float(vref)
         self.r_fixed = float(r_fixed)
-        self.pga = pga
-        self.data_rate = data_rate
+        self.pga = pga if pga is not None else PGA_4_096V
+        self.data_rate = data_rate if data_rate is not None else DR_250SPS
 
         # Load measured table (Temp_F, R)
         temps_f, res_ohm = load_two_row_table(csv_path)
@@ -110,13 +89,6 @@ class ThermistorADS:
         return (tf - 32.0) * (5.0 / 9.0)
 
     def read_adc_voltage(self):
-        # Uses your a2d.ADS1115 API
-        if self.pga is None and self.data_rate is None:
-            return self.ads.read_voltage(channel=self.ch)
-        if self.pga is None:
-            return self.ads.read_voltage(channel=self.ch, data_rate=self.data_rate)
-        if self.data_rate is None:
-            return self.ads.read_voltage(channel=self.ch, pga=self.pga)
         return self.ads.read_voltage(channel=self.ch, pga=self.pga, data_rate=self.data_rate)
 
     def read_temperature_f(self):
