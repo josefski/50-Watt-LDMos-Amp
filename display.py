@@ -97,7 +97,7 @@ class Display:
 
         # Build lines from templates and clamp
         line0 = dc.LINE0.format(swr=swr_s, pfwd=pfwd_s, band=band_label)
-        line1 = dc.LINE1.format(id=id_s, vd=vd_s)
+        line1 = dc.LINE1.format(ia=id_s, vd=vd_s)
 
         line0 = _clamp_str(line0, dc.LCD_COLS)
         line1 = _clamp_str(line1, dc.LCD_COLS)

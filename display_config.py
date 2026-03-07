@@ -20,8 +20,8 @@ BAND_LABELS = ("10", "20", "40")
 # Keys used in templates:
 #   swr - 4-char SWR string
 #   pfwd - 4-char forward power (integer)
-#   id - 4-char current (1 decimal)
+#   ia - 4-char current (1 decimal)
 #   vd - 4-char drain voltage (1 decimal)
 #   band - band label ("40"/"20"/"10")
 LINE0 = "S:{swr} P:{pfwd}W B:{band}"
-LINE1 = "I:{id}A D:{vd}V"
+LINE1 = "I:{ia}A D:{vd}V"
